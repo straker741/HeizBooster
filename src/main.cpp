@@ -14,11 +14,12 @@ State state = State::COLD;
 #define Q1_PIN        12
 #define ERROR_PIN     13
 
-#define DEBUGGING              1         // comment out when not used
+//#define DEBUGGING              1         // comment out when not used
 #define DELAY                  1000      // Miliseconds
 #define MAX_TEMP_THRESHOLD     34.75     // MUST BE GIVEN AS A MULTIPLY BY 0.25 !!!
 #define DELTA_TEMP             3.5
 #define MIN_FAN_PERCENTAGE     30.0
+#define MAX_CONSECUTIVE_ERRORS 5
 
 float dc = 0.0;
 float temps[5];
@@ -26,6 +27,7 @@ float maxTemp = 0;
 float minTemp = 0;
 uint8_t numberOfSensors = 0;
 uint8_t i = 0;
+uint8_t errors = 0;
 
 const float MIN_TEMP_THRESHOLD = MAX_TEMP_THRESHOLD - DELTA_TEMP;
 const float k = (float)(100.0 - MIN_FAN_PERCENTAGE) / (float)DELTA_TEMP;
@@ -113,27 +115,36 @@ void loop() {
         }
 
         // Determine the state based on the temperature
-        if (MAX_TEMP_THRESHOLD <= maxTemp) {
-            // temp: <34.75, +inf)
-            state = State::HOT;
-        }
-        else if ((MIN_TEMP_THRESHOLD <= maxTemp) && (maxTemp < MAX_TEMP_THRESHOLD)) {
-            // temp: <31.25, 34.75)
-            state = State::WARM;
+        // Check if there is incorrect value like DEVICE_DISCONNECTED_C
+        if (minTemp == DEVICE_DISCONNECTED_C) {
+            state = State::ERROR;
         }
         else {
-            // temp: (-inf, 31.25)
-            state = State::COLD;
+            if (MAX_TEMP_THRESHOLD <= maxTemp) {
+                // temp: <34.75, +inf)
+                state = State::HOT;
+            }
+            else if ((MIN_TEMP_THRESHOLD <= maxTemp) && (maxTemp < MAX_TEMP_THRESHOLD)) {
+                // temp: <31.25, 34.75)
+                state = State::WARM;
+            }
+            else {
+                // temp: (-inf, 31.25)
+                state = State::COLD;
+            }
         }
+
     }
 
     // Take action based on the state
     switch(state) {
         case State::HOT:
+            errors = 0;
             digitalWrite(Q1_PIN, HIGH);
             PWM_setDutyCycle(100);
             break;
         case State::WARM:
+            errors = 0;
             digitalWrite(Q1_PIN, HIGH);
 
             dc = k * maxTemp + q;
@@ -146,13 +157,18 @@ void loop() {
             #endif
             break;
         case State::COLD:
+            errors = 0;
             digitalWrite(Q1_PIN, LOW);
             PWM_setDutyCycle(100); // No narrow spike at the OCR2B == TOP
             // ??? Maybe turn off clock for timer2?
             break;
         case State::ERROR:
         default:
-            digitalWrite(Q1_PIN, LOW);
+            errors++;
+            if (errors > MAX_CONSECUTIVE_ERRORS) {
+                digitalWrite(Q1_PIN, LOW); // Turn off fans
+                errors = 0;
+            }
             for (i = 0; i < 4; i++) {
                 digitalWrite(ERROR_PIN, HIGH);
                 delay(SHORT_DELAY);
